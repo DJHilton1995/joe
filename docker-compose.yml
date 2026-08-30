@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  joey_mcp_guard:
+    build: .
+    container_name: joey_black_box
+    # 1. Empêche toute création de nouveaux privilèges (anti-exploit)
+    security_opt:
+      - no-new-privileges:true
+    # 2. Retire TOUTES les capacités du noyau Linux au conteneur
+    cap_drop:
+      - ALL
+    # 3. Le système de fichiers principal est 100% en LECTURE SEULE
+    read_only: true
+    volumes:
+      # Montage de l'identifiant matériel de la machine hôte en lecture seule
+      - /sys/class/dmi/id/product_uuid:/app/hw_sig:ro
+      # Volume chiffré pour stocker le blob AES statique
+      - ./vault_storage:/app/secure_data
+      # Montage en RAM (tmpfs) pour le traitement des données (rien sur le disque)
+      - type: tmpfs
+        target: /app/tmp
+        tmpfs:
+          size: 256M
+    networks:
+      - joey_airgap
+
+networks:
+  joey_airgap:
+    internal: true # Aucun accès à internet depuis ce réseau, pur air-gap

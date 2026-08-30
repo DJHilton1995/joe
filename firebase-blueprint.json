@@ -1,0 +1,102 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Unified profile representing the cognitive growth, XP, traits, and behavioral metrics.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "username": { "type": "string" },
+        "xp": { "type": "integer" },
+        "level": { "type": "integer" },
+        "growthStage": { "type": "string" },
+        "velocity": { "type": "number" },
+        "dialogueStyle": { "type": "string" },
+        "unlockedCapabilities": { "type": "array" },
+        "passkey": { "type": "string" },
+        "passkeyEnabled": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "xp", "level"]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "Engaged chat dialogues between the authenticated human ('Boss') and Joey AI.",
+      "type": "object",
+      "properties": {
+        "messageId": { "type": "string" },
+        "userId": { "type": "string" },
+        "role": { "type": "string" },
+        "content": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "imageUrl": { "type": "string" },
+        "levelAchieved": { "type": "integer" }
+      },
+      "required": ["messageId", "userId", "role", "content", "timestamp"]
+    },
+    "SecurityLog": {
+      "title": "SecurityLog",
+      "description": "Chronological system intrusions, anti-debugger warnings, honeytoken triggers, and sentinel sweeps.",
+      "type": "object",
+      "properties": {
+        "logId": { "type": "string" },
+        "userId": { "type": "string" },
+        "type": { "type": "string" },
+        "severity": { "type": "string" },
+        "details": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["logId", "userId", "type", "severity", "timestamp"]
+    },
+    "VaultEntry": {
+      "title": "VaultEntry",
+      "description": "Cryptographically secure client-side encrypted vault payload.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "size": { "type": "string" },
+        "date": { "type": "string" },
+        "encryptedPayload": { "type": "string" },
+        "iv": { "type": "string" },
+        "salt": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "encryptedPayload", "iv", "salt"]
+    },
+    "MemoryInsight": {
+      "title": "MemoryInsight",
+      "description": "Episodic memory insights generated during interactions.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "insight": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["insight"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "UserProfile",
+      "description": "Primary account and cognitive metrics profile map."
+    },
+    "users/{userId}/messages/{messageId}": {
+      "schema": "ChatMessage",
+      "description": "Interactive chronological brainwaves and memory cache."
+    },
+    "users/{userId}/securityLogs/{logId}": {
+      "schema": "SecurityLog",
+      "description": "Fortress status and safety indicators."
+    },
+    "users/{userId}/vault_entries/{entryId}": {
+      "schema": "VaultEntry",
+      "description": "Client-side encrypted zero-knowledge items."
+    },
+    "memories/{userId}/insights/{insightId}": {
+      "schema": "MemoryInsight",
+      "description": "Episodic memory insights stored by the client."
+    }
+  }
+}

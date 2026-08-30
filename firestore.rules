@@ -1,0 +1,91 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global safety catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Base primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Entity validators
+    function isValidUserProfile(user) {
+      return user.userId == request.auth.uid
+        && user.xp is int
+        && user.level is int
+        && (user.growthStage is string && user.growthStage.size() <= 64)
+        && (user.dialogueStyle is string && user.dialogueStyle.size() <= 32)
+        && (!user.keys().hasAll(['passkey']) || (user.passkey is string && user.passkey.size() <= 2048))
+        && (!user.keys().hasAll(['passkeyEnabled']) || user.passkeyEnabled is bool);
+    }
+
+    function isValidSecurityLog(log) {
+      return log.userId == request.auth.uid
+        && log.logId is string && log.logId.size() <= 128
+        && log.type is string && log.type.size() <= 64
+        && log.severity is string && log.severity.size() <= 32
+        && log.details is string && log.details.size() <= 1000;
+    }
+
+    function isValidMemoryInsight(insight) {
+      return insight.insight is string && insight.insight.size() <= 2000;
+    }
+
+    // Matches
+    match /users/{userId} {
+      allow get: if isSignedIn() && userId == request.auth.uid && isValidId(userId);
+      allow create: if isSignedIn() && userId == request.auth.uid && isValidId(userId) && isValidUserProfile(incoming());
+      allow update: if isSignedIn() && userId == request.auth.uid && isValidId(userId) && (
+        incoming().diff(existing()).affectedKeys().hasOnly(['xp', 'level', 'growthStage', 'velocity', 'dialogueStyle', 'unlockedCapabilities', 'updatedAt', 'likenessConfig', 'passkey', 'passkeyEnabled'])
+      );
+      allow delete: if false;
+
+      // Messages subcollection
+      match /messages/{messageId} {
+        allow read: if request.auth != null && request.auth.uid == userId;
+        allow write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // Security logs subcollection
+      match /securityLogs/{logId} {
+        allow read: if request.auth != null && request.auth.uid == userId;
+        allow write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // Vault entries subcollection (zero-knowledge client-side encrypted metadata)
+      match /vault_entries/{entryId} {
+        allow read: if request.auth != null && request.auth.uid == userId;
+        allow write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // Settings subcollection (cognitive memories, etc.)
+      match /settings/{settingsId} {
+        allow read: if request.auth != null && request.auth.uid == userId;
+        allow write: if request.auth != null && request.auth.uid == userId;
+      }
+    }
+
+    match /memories/{userId} {
+      match /insights/{insightId} {
+        allow read: if isSignedIn() && userId == request.auth.uid && isValidId(userId);
+        allow create, update: if isSignedIn() && userId == request.auth.uid && isValidId(userId) && isValidId(insightId) && isValidMemoryInsight(incoming());
+        allow delete: if isSignedIn() && userId == request.auth.uid && isValidId(userId) && isValidId(insightId);
+      }
+    }
+  }
+}

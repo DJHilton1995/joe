@@ -1,0 +1,6 @@
+{
+  "name": "Joey AI Chatbot",
+  "description": "An adaptive, multi-tier AI companion that grows with you, featuring RAM-only Phantom Vault mock security, Sentinel Intrusion protection, and custom cognitive evolution.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
