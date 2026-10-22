@@ -513,6 +513,7 @@ app.post('/api/quantum/token', verifyQuantumTunneling, (req, res) => {
       sessionSeed,
       beaconValue,
       kyberPublicKey: publicKey,
+      wireguardPublicKey: publicKey,
       securityCookieGranted: true,
       permissionStatus: 'GRANTED'
     });
@@ -565,7 +566,7 @@ app.get('/api/security/cookie-status', (req, res) => {
   });
 });
 
-app.post('/api/quantum/kyber-exchange', verifyQuantumTunneling, async (req, res) => {
+app.post(['/api/quantum/kyber-exchange', '/api/quantum/wireguard-exchange', '/api/wireguard/exchange'], verifyQuantumTunneling, async (req, res) => {
   try {
     const token = req.body.token || req.body.tokenId;
     const clientPublicKey = req.body.clientPublicKey;

@@ -126,9 +126,16 @@ export class MultiPartyOutputFragmentation {
         return shards;
     }
 
+    /**
+     * Alias for fragmentOutput for compatibility across callers
+     */
+    public fragmentResponse(aiResponse: string): Shard[] {
+        return this.fragmentOutput(aiResponse);
+    }
+
     public reconstructFromShards(shards: Shard[], expectedMerkleRoot: string | null = null): string {
-        if (shards.length < this.threshold) {
-            throw new Error(`Need ${this.threshold} shards, got ${shards.length}`);
+        if (!shards || shards.length < this.threshold) {
+            throw new Error(`Need ${this.threshold} shards, got ${shards ? shards.length : 0}`);
         }
 
         // Use first 'threshold' shards

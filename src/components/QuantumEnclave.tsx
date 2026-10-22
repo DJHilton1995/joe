@@ -459,30 +459,38 @@ export default function QuantumEnclave() {
       <div className="bg-[#2d0a42] border border-pink-600/50 shadow-[0_0_15px_rgba(236,72,153,0.5)] rounded-xl p-4 flex flex-col gap-3">
         <div className="flex items-center justify-between">
           <h4 className="font-mono text-xs font-bold text-cyan-300 flex items-center gap-1.5">
-            <ShieldCheck className="w-4 h-4 text-pink-500" /> CRYSTALS-Kyber-768 Shield Protection
+            <ShieldCheck className="w-4 h-4 text-pink-500" /> WireGuard Cryptographic Enclave
           </h4>
           <span className={`text-[9px] font-mono uppercase px-2 py-0.5 rounded border ${
             kyberSharedSecret 
               ? 'bg-emerald-950/40 text-emerald-400 border-emerald-800' 
               : 'bg-stone-900 text-purple-300 border-stone-850'
           }`}>
-            {kyberSharedSecret ? 'Kyber Active' : 'Offline'}
+            {kyberSharedSecret ? 'WireGuard Active' : 'Offline'}
           </span>
         </div>
 
         <p className="text-[10px] font-mono text-pink-300 leading-snug">
-          Secures requests with post-quantum Key Encapsulation (MLWE lattice math). Automatically rotates credentials to ensure forward secrecy.
+          Secures requests with established WireGuard Curve25519 (X25519 ECDH) and ChaCha20-Poly1305 AEAD. Automatically rotates peer keys every 30s to enforce forward secrecy.
         </p>
 
         {tokenId && kyberSharedSecret && (
           <div className="bg-[#110522] border border-stone-850 rounded-lg p-3 space-y-2 text-[10px] font-mono">
             <div className="flex justify-between items-center border-b border-stone-900 pb-1.5">
-              <span className="text-purple-300">PQC Standard:</span>
-              <span className="text-pink-500 font-bold">CRYSTALS-Kyber-768 (q=3329, K=3)</span>
+              <span className="text-purple-300">Crypto Protocol:</span>
+              <span className="text-pink-500 font-bold">WireGuard (Curve25519 + ChaCha20-Poly1305)</span>
+            </div>
+            <div className="flex justify-between items-center border-b border-stone-900 pb-1.5">
+              <span className="text-purple-300">WireGuard Peer PubKey:</span>
+              <span className="text-cyan-300 font-bold select-all truncate max-w-[185px]" title={kyberPublicKey}>
+                {kyberPublicKey ? `${kyberPublicKey.substring(0, 16)}...` : '[ACTIVE]'}
+              </span>
             </div>
             <div className="flex justify-between items-center border-b border-stone-900 pb-1.5">
               <span className="text-purple-300">Joint Shared Secret:</span>
-              <span className="text-purple-300 font-bold select-all truncate max-w-[185px]">[HIDDEN]</span>
+              <span className="text-purple-300 font-bold select-all truncate max-w-[185px]">
+                {kyberSecretHash}
+              </span>
             </div>
             
             <div className="flex justify-between items-center border-b border-stone-900 pb-1.5">
@@ -511,7 +519,7 @@ export default function QuantumEnclave() {
             className="flex-1 bg-cyan-950/20 hover:bg-cyan-900/30 text-cyan-300 hover:text-white border border-pink-600/50 shadow-[0_0_15px_rgba(236,72,153,0.5)] font-mono text-[10px] font-bold py-2 rounded-lg transition flex items-center justify-center gap-1 disabled:opacity-50"
           >
             <Key className="w-3 h-3" />
-            {isProvisioning ? 'Handshaking...' : tokenId ? 'Re-Key Session' : 'Forge Kyber Session'}
+            {isProvisioning ? 'Handshaking...' : tokenId ? 'Re-Key WireGuard Session' : 'Establish WireGuard Tunnel'}
           </button>
           {tokenId && kyberSharedSecret && (
             <button

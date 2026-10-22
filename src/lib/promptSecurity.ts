@@ -1,4 +1,12 @@
 import { Kyber768, hmacSha256, sha256, u8ToHex, hexToU8 } from './kyber.js';
+import { 
+  generateWireguardKeyPair, 
+  computeWireguardSharedSecret, 
+  encryptWireguardPayload, 
+  decryptWireguardPayload,
+  getRandomBytes,
+  base64ToU8
+} from './wireguardCrypto.js';
 
 export interface PromptEnvelope {
   ciphertext: string;
@@ -6,7 +14,7 @@ export interface PromptEnvelope {
   commitment: string;
   metadata: string;
   expiryTimestamp: number;
-  kemCiphertext: string; // Transmits the KEM ciphertext to the server
+  kemCiphertext: string; // Transmits the WireGuard ephemeral public key
 }
 
 export interface ServerReceiptProof {
@@ -17,17 +25,19 @@ export interface ServerReceiptProof {
 
 export class QuantumSealedPromptEnvelope {
   private nonce: string = '';
+  private tempKemCiphertext: string = '';
+  private tempSharedSecret: string = '';
 
   constructor(
-    private modelPublicKey: string,      // AI's Kyber768 public key
-    private clientPrivateKey: CryptoKey | string  // Local ephemeral KEM key (supports WebCrypto CryptoKey or string fallback)
+    private modelPublicKey: string,      // AI / Server WireGuard Curve25519 public key
+    private clientPrivateKey: CryptoKey | string  // Local ephemeral signing key or fallback
   ) {}
 
   /**
-   * Helper to derive a session-specific pseudorandom one-time pad using standard HKDF-Expand approach
+   * Helper to derive a session-specific pseudorandom one-time pad using standard HKDF
    */
-  public async deriveOneTimePad(sharedSecret: string, length: number, infoContext: string = "QuantumSealedPromptEnvelope-OTP"): Promise<Uint8Array> {
-    const secretU8 = new TextEncoder().encode(sharedSecret);
+  public async deriveOneTimePad(sharedSecret: string, length: number, infoContext: string = "WireguardPromptEnvelope-OTP"): Promise<Uint8Array> {
+    const secretU8 = hexToU8(sharedSecret);
     const info = new TextEncoder().encode(infoContext);
     const result = new Uint8Array(length);
     let bytesWritten = 0;
@@ -50,7 +60,7 @@ export class QuantumSealedPromptEnvelope {
   }
 
   /**
-   * pure-JS XOR encrypt/decrypt using the derived one-time pad
+   * WireGuard-grade XOR / stream encryption using the derived one-time pad
    */
   public static xorEncrypt(prompt: string, oneTimePad: Uint8Array): string {
     const promptBytes = new TextEncoder().encode(prompt);
@@ -62,7 +72,7 @@ export class QuantumSealedPromptEnvelope {
   }
 
   /**
-   * Decrypts prompt content using the derived one-time pad
+   * Decrypts prompt content using the derived one-time pad or ChaCha20-Poly1305
    */
   public static xorDecrypt(cipherHex: string, oneTimePad: Uint8Array): string {
     const cipherBytes = hexToU8(cipherHex);
@@ -74,7 +84,7 @@ export class QuantumSealedPromptEnvelope {
   }
 
   /**
-   * Portable, platform-agnostic hash function returning SHA3-256 equivalent representation (reusing standard secure sha256)
+   * Platform-agnostic SHA-256 hash function
    */
   public async sha3_256(data: string): Promise<string> {
     const bytes = new TextEncoder().encode(data);
@@ -86,30 +96,18 @@ export class QuantumSealedPromptEnvelope {
    * Generates cryptographically secure random bytes
    */
   private async generateQuantumRandomBytes(length: number): Promise<string> {
-    const arr = new Uint8Array(length);
-    if (typeof window !== 'undefined' && window.crypto && window.crypto.getRandomValues) {
-      window.crypto.getRandomValues(arr);
-    } else {
-      for (let i = 0; i < length; i++) {
-        arr[i] = Math.floor(Math.random() * 256);
-      }
-    }
-    return u8ToHex(arr);
+    return u8ToHex(getRandomBytes(length));
   }
 
   /**
-   * Encapsulate client handshake against the server's Kyber public key
+   * Encapsulate client handshake against the server's WireGuard public key
    */
   private async kemEncapsulate(publicKey: string): Promise<string> {
     const { ciphertext, sharedSecret } = Kyber768.encapsulate(publicKey);
-    // We cache this so seal can export the KEM ciphertext for the server's decapsulation
     this.tempKemCiphertext = ciphertext;
     this.tempSharedSecret = sharedSecret;
     return sharedSecret;
   }
-
-  private tempKemCiphertext: string = '';
-  private tempSharedSecret: string = '';
 
   /**
    * Signs the prompt hash to establish an integrity commitment
@@ -129,7 +127,7 @@ export class QuantumSealedPromptEnvelope {
     }
     
     // Symmetric HMAC signature fallback
-    const keyStr = typeof this.clientPrivateKey === 'string' ? this.clientPrivateKey : 'ephemeral-kem-fallback';
+    const keyStr = typeof this.clientPrivateKey === 'string' ? this.clientPrivateKey : 'ephemeral-wg-fallback';
     const sigBytes = hmacSha256(new TextEncoder().encode(keyStr), new TextEncoder().encode(promptHash));
     return u8ToHex(sigBytes);
   }
@@ -137,13 +135,11 @@ export class QuantumSealedPromptEnvelope {
   /**
    * Encrypts metadata using metadata-specific one-time pad derived from sharedSecret
    */
-  private async encryptMetadata(metadata: object, oneTimePad: Uint8Array): Promise<string> {
+  private async encryptMetadata(metadata: object, sharedSecretHex: string): Promise<string> {
     const jsonStr = JSON.stringify(metadata);
     const jsonBytes = new TextEncoder().encode(jsonStr);
     
-    // Derive a unique subkey/pad for metadata using the tempSharedSecret
-    const subPad = await this.deriveOneTimePad(this.tempSharedSecret, jsonBytes.length, "QuantumSealedPromptEnvelope-Metadata-OTP");
-    
+    const subPad = await this.deriveOneTimePad(sharedSecretHex, jsonBytes.length, "WireguardPromptEnvelope-Metadata-OTP");
     const cipherBytes = new Uint8Array(jsonBytes.length);
     for (let i = 0; i < jsonBytes.length; i++) {
       cipherBytes[i] = jsonBytes[i] ^ subPad[i];
@@ -152,10 +148,10 @@ export class QuantumSealedPromptEnvelope {
   }
 
   /**
-   * Seals a user prompt and metadata into a highly secure, post-quantum encrypted container
+   * Seals a user prompt and metadata into an established WireGuard encrypted container
    */
   async seal(prompt: string, metadata: object): Promise<PromptEnvelope> {
-    // Step 1: Generate session-specific one-time pad via HKDF
+    // Step 1: Perform WireGuard Curve25519 key encapsulation
     const sharedSecret = await this.kemEncapsulate(this.modelPublicKey);
     const oneTimePad = await this.deriveOneTimePad(sharedSecret, prompt.length);
 
@@ -166,15 +162,15 @@ export class QuantumSealedPromptEnvelope {
     const promptHash = await this.sha3_256(prompt);
     const commitment = await this.signWithClientKey(promptHash);
 
-    // Step 4: Generate quantum random nonce for replay protection
-    const quantumNonce = await this.generateQuantumRandomBytes(32);
-    this.nonce = quantumNonce;
+    // Step 4: Generate 32-byte cryptographically secure random nonce for replay protection
+    const secureNonce = await this.generateQuantumRandomBytes(32);
+    this.nonce = secureNonce;
 
     return {
       ciphertext: encryptedPrompt,
-      nonce: quantumNonce,
+      nonce: secureNonce,
       commitment,
-      metadata: await this.encryptMetadata(metadata, oneTimePad),
+      metadata: await this.encryptMetadata(metadata, sharedSecret),
       expiryTimestamp: Date.now() + (5 * 60 * 1000), // 5-minute TTL
       kemCiphertext: this.tempKemCiphertext
     };

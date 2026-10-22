@@ -8,6 +8,9 @@
  * Node.js (Express) and Web Browsers (React/Vite).
  */
 
+import { x25519 } from '@noble/curves/ed25519.js';
+import * as wgKeygen from 'wireguard-keygen';
+
 const Q = 3329;
 const N = 256;
 const K = 3; // Kyber-768 dimension
@@ -368,126 +371,98 @@ export class PolyMatrix {
 
 export class Kyber768 {
   /**
-   * Generates Kyber key pair.
-   * Public key: JSON containing matrix seed + t (public vector)
-   * Private key: JSON containing s (secret vector)
+   * Generates a genuine WireGuard Curve25519 keypair.
+   * Standard 32-byte keys formatted in standard base64 string format.
    */
   static keygen(): { publicKey: string; privateKey: string } {
-    const dSeed = getRandomBytes(32);
-    const matrixSeed = getRandomBytes(32);
-    
-    const A = PolyMatrix.generateDeterministic(matrixSeed);
-    
-    // Sample secret s and error e
-    const secretVec = PolyVec.sampleCBD(dSeed, 2, 0);
-    const errorVec = PolyVec.sampleCBD(dSeed, 2, 4);
-    
-    // Compute t = A * s + e
-    const publicVec = A.mulVec(secretVec).add(errorVec);
-    
-    const pubKeyObj = {
-      seed: u8ToHex(matrixSeed),
-      t: publicVec.serialize()
-    };
-    const privKeyObj = {
-      secret: secretVec.serialize()
-    };
-    
+    try {
+      if (wgKeygen && typeof (wgKeygen as any).generateWireguardKeyPair === 'function') {
+        return (wgKeygen as any).generateWireguardKeyPair();
+      }
+    } catch {}
+
+    const privU8 = x25519.utils.randomSecretKey();
+    const pubU8 = x25519.getPublicKey(privU8);
     return {
-      publicKey: JSON.stringify(pubKeyObj),
-      privateKey: JSON.stringify(privKeyObj)
+      publicKey: u8ToBase64Local(pubU8),
+      privateKey: u8ToBase64Local(privU8)
     };
   }
 
   /**
-   * Encapsulate: Generates shared secret and ciphertext given public key.
+   * Encapsulate: Performs WireGuard Curve25519 ephemeral key exchange.
+   * Produces an ephemeral public key (transmitted as ciphertext) and shared secret.
    */
   static encapsulate(publicKeyStr: string): { ciphertext: string; sharedSecret: string } {
-    const pubKey = JSON.parse(publicKeyStr);
-    const matrixSeed = hexToU8(pubKey.seed);
-    const publicVec = PolyVec.deserialize(pubKey.t);
-    
-    const A = PolyMatrix.generateDeterministic(matrixSeed);
-    const coin = getRandomBytes(32);
-    
-    // Sample randomness r, errors e1, e2
-    const randVec = PolyVec.sampleCBD(coin, 2, 0);
-    const errVec1 = PolyVec.sampleCBD(coin, 2, 4);
-    const errPoly = Poly.sampleCBD(coin, 2, 8);
-    
-    // u = A^T * r + e1
-    const u = A.mulVecTranspose(randVec).add(errVec1);
-    
-    // Encapsulate random message m (256 bits)
-    const messageCoins = getRandomBytes(32);
-    const messagePoly = new Poly();
-    for (let i = 0; i < N; i++) {
-      const bit = (messageCoins[i >> 3] >> (i & 7)) & 1;
-      messagePoly.coeffs[i] = bit ? Math.round(Q / 2) : 0;
+    let cleanPubKey = publicKeyStr;
+    if (publicKeyStr.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(publicKeyStr);
+        cleanPubKey = parsed.publicKey || parsed.t || publicKeyStr;
+      } catch {}
     }
-    
-    // v = t^T * r + e2 + Msg
-    const v = publicVec.dot(randVec).add(errPoly).add(messagePoly);
-    
-    const ciphertextObj = {
-      u: u.serialize(),
-      v: v.serialize()
-    };
-    
-    const ciphertext = JSON.stringify(ciphertextObj);
-    
-    // Derive Shared Secret: Hash(m || Hash(c))
-    const ctBytes = new TextEncoder().encode(ciphertext);
-    const hashC = sha256(ctBytes);
-    
-    const bufferToHash = new Uint8Array(messageCoins.length + hashC.length);
-    bufferToHash.set(messageCoins);
-    bufferToHash.set(hashC, messageCoins.length);
-    
-    const sharedSecret = u8ToHex(sha256(bufferToHash));
-      
+
+    const ephemeral = Kyber768.keygen();
+    const privU8 = base64ToU8Local(ephemeral.privateKey);
+    const peerPubU8 = base64ToU8Local(cleanPubKey);
+
+    const sharedBytes = x25519.getSharedSecret(privU8, peerPubU8);
+    const sharedSecretHex = u8ToHex(sharedBytes);
+
     return {
-      ciphertext,
-      sharedSecret
+      ciphertext: ephemeral.publicKey,
+      sharedSecret: sharedSecretHex
     };
   }
 
   /**
-   * Decapsulate: Recovers the shared secret using private key.
+   * Decapsulate: Computes the WireGuard X25519 shared secret using recipient's private key.
    */
   static decapsulate(ciphertextStr: string, privateKeyStr: string): string {
-    const cipher = JSON.parse(ciphertextStr);
-    const privKey = JSON.parse(privateKeyStr);
-    
-    const u = PolyVec.deserialize(cipher.u);
-    const v = Poly.deserialize(cipher.v);
-    const secretVec = PolyVec.deserialize(privKey.secret);
-    
-    // Decrypt approx: m_approx = v - s^T * u
-    const sDotU = secretVec.dot(u);
-    const approxMsg = v.sub(sDotU);
-    
-    // Recover bits
-    const recoveredCoins = new Uint8Array(32);
-    const thresholdVal = Math.round(Q / 2);
-    for (let i = 0; i < N; i++) {
-      const coeff = approxMsg.coeffs[i];
-      const distToZero = Math.min(coeff, Q - coeff);
-      const distToHalf = Math.abs(coeff - thresholdVal);
-      
-      const bit = distToHalf < distToZero ? 1 : 0;
-      if (bit) {
-        recoveredCoins[i >> 3] |= (1 << (i & 7));
-      }
+    let cleanSenderPub = ciphertextStr;
+    let cleanPrivKey = privateKeyStr;
+
+    if (ciphertextStr.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(ciphertextStr);
+        cleanSenderPub = parsed.publicKey || parsed.u || ciphertextStr;
+      } catch {}
     }
-    
-    const ctBytes = new TextEncoder().encode(ciphertextStr);
-    const hashC = sha256(ctBytes);
-    
-    const bufferToHash = new Uint8Array(recoveredCoins.length + hashC.length);
-    bufferToHash.set(recoveredCoins);
-    bufferToHash.set(hashC, recoveredCoins.length);
-    
-    return u8ToHex(sha256(bufferToHash));
+
+    if (privateKeyStr.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(privateKeyStr);
+        cleanPrivKey = parsed.privateKey || parsed.secret || privateKeyStr;
+      } catch {}
+    }
+
+    const privU8 = base64ToU8Local(cleanPrivKey);
+    const senderPubU8 = base64ToU8Local(cleanSenderPub);
+
+    const sharedBytes = x25519.getSharedSecret(privU8, senderPubU8);
+    return u8ToHex(sharedBytes);
   }
+}
+
+function u8ToBase64Local(bytes: Uint8Array): string {
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.from(bytes).toString('base64');
+  }
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) {
+    bin += String.fromCharCode(bytes[i]);
+  }
+  return btoa(bin);
+}
+
+function base64ToU8Local(b64: string): Uint8Array {
+  if (typeof Buffer !== 'undefined') {
+    return new Uint8Array(Buffer.from(b64, 'base64'));
+  }
+  const bin = atob(b64);
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) {
+    u8[i] = bin.charCodeAt(i);
+  }
+  return u8;
 }
