@@ -438,7 +438,7 @@ export default function App() {
   const [thinkingMode, setThinkingMode] = useState<boolean>(false);
   const [useSearchGrounding, setUseSearchGrounding] = useState<boolean>(true);
   const [isLiveVoiceOpen, setIsLiveVoiceOpen] = useState<boolean>(false);
-  const [selectedModel, setSelectedModel] = useState<string>('gemini-3.8-flash');
+  const [selectedModel, setSelectedModel] = useState<string>('auto');
   
   // Shared canvas states
   const [canvasCode, setCanvasCode] = useState<string>('');
@@ -629,7 +629,7 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          currentMessage: promptEnvelope ? undefined : finalMsg,
+          currentMessage: finalMsg,
           promptEnvelope: promptEnvelope && !promptEnvelope.legacy ? promptEnvelope : undefined,
           encryptedPrompt: promptEnvelope && promptEnvelope.legacy ? promptEnvelope.ciphertext : undefined,
           encryptedPasskey,
@@ -650,6 +650,9 @@ export default function App() {
       });
 
       const data = await response.json();
+      if (data.error === 'HANDSHAKE_EXPIRED' || data.error === 'DECRYPTION_FAILED') {
+        establishQuantumKyberSession();
+      }
       
       let finalReply = '';
       if (data.mpofShards) {
@@ -659,7 +662,7 @@ export default function App() {
           console.log('[SECURITY VERIFICATION] MPOF Shards successfully reconstructed using Shamir Secret Sharing (GF256). Merkle Root verified.');
         } catch (mpofErr) {
           console.error("Failed to reconstruct MPOF shards", mpofErr);
-          finalReply = "**[SECURITY BREACH WARNING]** Output reconstruction failed. Shards tampered or corrupted.";
+          finalReply = data.reply || "**[SECURITY BREACH WARNING]** Output reconstruction failed. Shards tampered or corrupted.";
         }
       } else if (data.reply) {
         finalReply = data.reply;

@@ -6,7 +6,6 @@
 
 import { x25519 } from '@noble/curves/ed25519.js';
 import { chacha20poly1305 } from '@noble/ciphers/chacha.js';
-import * as wgKeygen from 'wireguard-keygen';
 import { sha256, hmacSha256 } from './kyber.js';
 
 export { sha256, hmacSha256 };
@@ -99,14 +98,6 @@ export function getRandomBytes(len: number): Uint8Array {
  * Generate standard WireGuard Curve25519 keypair formatted in base64
  */
 export function generateWireguardKeyPair(): WireguardKeyPair {
-  try {
-    if (wgKeygen && typeof (wgKeygen as any).generateWireguardKeyPair === 'function') {
-      return (wgKeygen as any).generateWireguardKeyPair();
-    }
-  } catch (e) {
-    // fallback to noble x25519
-  }
-  
   const privU8 = x25519.utils.randomSecretKey();
   const pubU8 = x25519.getPublicKey(privU8);
   return {
@@ -119,12 +110,6 @@ export function generateWireguardKeyPair(): WireguardKeyPair {
  * Derives the WireGuard public key from a base64 private key
  */
 export function deriveWireguardPublicKey(privateKeyBase64: string): string {
-  try {
-    if (wgKeygen && typeof (wgKeygen as any).derivePublicKey === 'function') {
-      return (wgKeygen as any).derivePublicKey(privateKeyBase64);
-    }
-  } catch (e) {}
-
   const privU8 = base64ToU8(privateKeyBase64);
   const pubU8 = x25519.getPublicKey(privU8);
   return u8ToBase64(pubU8);

@@ -153,7 +153,8 @@ export class QuantumSealedPromptEnvelope {
   async seal(prompt: string, metadata: object): Promise<PromptEnvelope> {
     // Step 1: Perform WireGuard Curve25519 key encapsulation
     const sharedSecret = await this.kemEncapsulate(this.modelPublicKey);
-    const oneTimePad = await this.deriveOneTimePad(sharedSecret, prompt.length);
+    const promptByteLen = new TextEncoder().encode(prompt).length;
+    const oneTimePad = await this.deriveOneTimePad(sharedSecret, promptByteLen);
 
     // Step 2: Encrypt prompt content
     const encryptedPrompt = QuantumSealedPromptEnvelope.xorEncrypt(prompt, oneTimePad);

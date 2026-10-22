@@ -9,7 +9,6 @@
  */
 
 import { x25519 } from '@noble/curves/ed25519.js';
-import * as wgKeygen from 'wireguard-keygen';
 
 const Q = 3329;
 const N = 256;
@@ -375,12 +374,6 @@ export class Kyber768 {
    * Standard 32-byte keys formatted in standard base64 string format.
    */
   static keygen(): { publicKey: string; privateKey: string } {
-    try {
-      if (wgKeygen && typeof (wgKeygen as any).generateWireguardKeyPair === 'function') {
-        return (wgKeygen as any).generateWireguardKeyPair();
-      }
-    } catch {}
-
     const privU8 = x25519.utils.randomSecretKey();
     const pubU8 = x25519.getPublicKey(privU8);
     return {
