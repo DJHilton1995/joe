@@ -1,7 +1,9 @@
 import express from 'express';
+import http from 'http';
+import { WebSocketServer, WebSocket } from 'ws';
 import rateLimit from 'express-rate-limit';
 import { createServer as createViteServer } from 'vite';
-import { GoogleGenAI, GenerateVideosOperation, ThinkingLevel } from '@google/genai';
+import { GoogleGenAI, GenerateVideosOperation, ThinkingLevel, Modality } from '@google/genai';
 import Groq from 'groq-sdk';
 import OpenAI from 'openai';
 import dotenv from 'dotenv';
@@ -157,8 +159,26 @@ const trackerBlockerMiddleware = (req: express.Request, res: express.Response, n
 dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const apiKey = process.env.GEMINI_API_KEY;
-const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
+let cachedApiKey = process.env.API_KEY || process.env.GEMINI_API_KEY || '';
+let cachedAi: GoogleGenAI | null = cachedApiKey
+  ? new GoogleGenAI({ apiKey: cachedApiKey, httpOptions: { headers: { 'User-Agent': 'aistudio-build' } } })
+  : null;
+
+function getGenAI(): GoogleGenAI | null {
+  const currentKey = process.env.API_KEY || process.env.GEMINI_API_KEY || '';
+  if (!currentKey) return null;
+  if (currentKey !== cachedApiKey || !cachedAi) {
+    cachedApiKey = currentKey;
+    cachedAi = new GoogleGenAI({
+      apiKey: currentKey,
+      httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
+    });
+  }
+  return cachedAi;
+}
+
+const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
+const ai = cachedAi;
 
 const groq = process.env.GROQ_API_KEY ? new Groq({ apiKey: process.env.GROQ_API_KEY }) : null;
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
@@ -784,7 +804,7 @@ app.post('/api/quantum/prompt', verifyQuantumTunneling, async (req, res) => {
       try {
         const systemInstruction = `You are Joey, a highly intelligent 1980s retro-cyber themed security co-pilot. Keep answers direct, analytical, secure and extremely articulate. Keep standard formatting.`;
         const geminiRes = await ai.models.generateContent({
-          model: 'gemini-2.5-flash',
+          model: 'gemini-3.8-flash',
           contents: [finalPrompt],
           config: { systemInstruction, temperature: 0.3 },
         });
@@ -920,7 +940,7 @@ Scraped text context:
 ${rawText.substring(0, 3200)}`;
 
       const geminiRes = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: 'gemini-3.8-flash',
         contents: [promptMsg],
         config: { systemInstruction: modelInstruction, responseMimeType: 'application/json', temperature: 0.15 },
       });
@@ -1042,7 +1062,7 @@ const joeyEpisodicMemory: { timestamp: string; insight: string }[] = [];
   // Core Service Chat (Paced and validated via JoeyPalma Enhanced Secure Protocol)
   serviceApp.post('/service/chat', async (req, res) => {
     try {
-      const { messages, userProfile, currentMessage, imageBase64, imageMimeType, tokenId, hash, context, kyberSignature, videoBase64, videoMimeType, thinkingMode, selectedModel } = req.body;
+      const { messages, userProfile, currentMessage, imageBase64, imageMimeType, tokenId, hash, context, kyberSignature, videoBase64, videoMimeType, thinkingMode, selectedModel, useSearchGrounding } = req.body;
 
       // 1. Session integrity check using TPM hardware-backed logic
       if (!tokenId || !hash || !kyberSignature) {
@@ -1066,7 +1086,8 @@ const joeyEpisodicMemory: { timestamp: string; insight: string }[] = [];
       const mood = userProfile?.mood || 'straightforward';
       const outputLength = userProfile?.outputLength || 'at length';
 
-      if (!ai) {
+      const activeAi = getGenAI();
+      if (!activeAi) {
         const fallback = generateJoeyLocalAnswer(currentMessage || '', level, style, username, !!imageBase64);
         const contentLen = currentMessage ? currentMessage.length : 0;
         const xpReward = Math.min(25, Math.max(5, Math.floor(contentLen / 12) + (imageBase64 ? 15 : 0)));
@@ -1288,13 +1309,21 @@ ${joeyEpisodicMemory.length > 0
           replyText = openaiResponse.choices[0]?.message?.content || 'OpenAI error';
         } else if (effectiveModel === 'maverick') {
           replyText = "Maverick Quantum Protocol Offline: Waiting for Maverick weights to be deployed to the JoeyPalma ESP network.";
-        } else if (ai) {
-          let modelSelected = 'gemini-3.5-flash';
+        } else if (activeAi) {
+          let modelSelected = 'gemini-3.8-flash';
+          if (effectiveModel === 'gemini-3.1-flash-lite') {
+            modelSelected = 'gemini-3.1-flash-lite';
+          } else if (effectiveModel === 'gemini-4-argon' && process.env.API_KEY) {
+            modelSelected = 'gemini-4-argon';
+          } else {
+            modelSelected = 'gemini-3.8-flash';
+          }
+
+          const shouldUseSearch = useSearchGrounding !== false;
           const modelConfig: any = {
             systemInstruction: systemPrompt,
             temperature: 0.7,
             topP: 0.9,
-            tools: [{ googleSearch: {} }],
             safetySettings: [
               { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
               { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
@@ -1303,17 +1332,17 @@ ${joeyEpisodicMemory.length > 0
             ]
           };
 
-          if (imageBase64 || videoBase64 || thinkingMode) {
-            modelSelected = 'gemini-3.1-pro-preview';
+          if (shouldUseSearch) {
+            modelConfig.tools = [{ googleSearch: {} }];
           }
 
-          if (thinkingMode) {
+          if (thinkingMode && (modelSelected === 'gemini-4-argon' || modelSelected === 'gemini-3.8-flash')) {
             modelConfig.thinkingConfig = {
               thinkingLevel: ThinkingLevel.HIGH
             };
           }
 
-          const response = await ai.models.generateContent({
+          const response = await activeAi.models.generateContent({
             model: modelSelected,
             contents: formattedContents,
             config: modelConfig,
@@ -1576,42 +1605,216 @@ ${joeyEpisodicMemory.length > 0
     }
   });
 
-  // API: Video Generation with Veo (3-step pattern)
-  app.post('/api/generate-video', verifyJoeyClientSession, async (req, res) => {
-    const { prompt, imageBase64, imageMimeType, aspectRatio } = req.body;
-    if (!ai) {
+  // Store completed Omni video buffers in RAM for legacy /api/video-status & /api/video-download callers
+  const omniVideoCache = new Map<string, Buffer>();
+
+  // API: Create & Edit Images with gemini-nano-banana-2.1
+  app.post('/api/gemini/image', verifyJoeyClientSession, async (req, res) => {
+    const { prompt, imageBase64, imageMimeType, aspectRatio, imageSize } = req.body;
+    if (!prompt) {
+      return res.status(400).json({ error: 'Prompt is required for image synthesis.' });
+    }
+    const activeAi = getGenAI();
+    if (!activeAi) {
       return res.status(500).json({ error: 'Gemini AI client is not initialized.' });
     }
     try {
-      const config: any = {
-        numberOfVideos: 1,
-        resolution: '720p',
-        aspectRatio: aspectRatio === '9:16' ? '9:16' : '16:9',
-        safetySettings: [
-          { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' }
-        ]
-      };
-      
-      const params: any = {
-        model: 'veo-3.1-fast-generate-preview',
-        prompt: prompt || 'Animate this image',
-        config
-      };
-
+      const parts: any[] = [];
       if (imageBase64) {
-        params.image = {
-          imageBytes: imageBase64.split(',')[1] || imageBase64,
-          mimeType: imageMimeType || 'image/png'
-        };
+        const cleanBase64 = imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64;
+        parts.push({
+          inlineData: {
+            data: cleanBase64,
+            mimeType: imageMimeType || 'image/png',
+          },
+        });
+      }
+      parts.push({ text: prompt });
+
+      const response = await activeAi.models.generateContent({
+        model: 'gemini-nano-banana-2.1',
+        contents: { parts },
+        config: {
+          imageConfig: {
+            aspectRatio: aspectRatio || '1:1',
+            imageSize: imageSize || '1K',
+          },
+        },
+      });
+
+      let generatedImageUrl: string | null = null;
+      let textOutput = '';
+
+      const candidateParts = response.candidates?.[0]?.content?.parts || [];
+      for (const part of candidateParts) {
+        if (part.inlineData && part.inlineData.data) {
+          const mime = part.inlineData.mimeType || 'image/png';
+          generatedImageUrl = `data:${mime};base64,${part.inlineData.data}`;
+        } else if (part.text) {
+          textOutput += part.text;
+        }
       }
 
-      const operation = await ai.models.generateVideos(params);
-      res.json({ operationName: operation.name });
+      if (!generatedImageUrl) {
+        // Fallback to unified renderer if model returned only text
+        const fallback = await JoeyUnifiedRenderer.renderMedia({ prompt });
+        return res.json({
+          success: true,
+          imageUrl: fallback.imageUrl,
+          text: textOutput || fallback.label,
+          model: 'gemini-nano-banana-2.1',
+        });
+      }
+
+      res.json({
+        success: true,
+        imageUrl: generatedImageUrl,
+        text: textOutput,
+        model: 'gemini-nano-banana-2.1',
+      });
     } catch (err: any) {
-      console.error("Video generation start failed:", err);
+      console.error('[Nano Banana 2.1 Error]', err);
+      res.status(500).json({ error: err.message || 'Image generation failed.' });
+    }
+  });
+
+  // API: Generate Video from Text or Animate Image into Video with gemini-omni-1.1-flash (Interactions API)
+  app.post('/api/gemini/video', verifyJoeyClientSession, async (req, res) => {
+    const { prompt, imageBase64, imageMimeType, aspectRatio, duration } = req.body;
+    const activeAi = getGenAI();
+    if (!activeAi) {
+      return res.status(500).json({ error: 'Gemini AI client is not initialized.' });
+    }
+    try {
+      const targetAspect = aspectRatio === '9:16' ? '9:16' : '16:9';
+      let inputPayload: any = prompt || 'Animate this scene with smooth cinematic camera motion and cyber neon lighting';
+
+      if (imageBase64) {
+        const cleanBase64 = imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64;
+        inputPayload = [
+          {
+            type: 'image',
+            mime_type: imageMimeType || 'image/png',
+            data: cleanBase64,
+          },
+          {
+            type: 'text',
+            text: prompt || 'Animate this image with smooth cinematic motion',
+          },
+        ];
+      }
+
+      const interaction: any = await activeAi.interactions.create({
+        model: 'gemini-omni-1.1-flash',
+        input: inputPayload,
+        response_format: {
+          type: 'video',
+          aspect_ratio: targetAspect,
+          duration: duration || '5s',
+          resolution: '720p',
+        },
+      } as any);
+
+      let videoBuffer: Buffer | null = null;
+      if (interaction.output_video) {
+        if (Buffer.isBuffer(interaction.output_video)) {
+          videoBuffer = interaction.output_video;
+        } else if (typeof interaction.output_video === 'string') {
+          videoBuffer = Buffer.from(interaction.output_video, 'base64');
+        } else if (interaction.output_video instanceof Uint8Array) {
+          videoBuffer = Buffer.from(interaction.output_video);
+        }
+      } else if (Array.isArray(interaction.outputs)) {
+        for (const output of interaction.outputs) {
+          if (output.type === 'video' && output.data) {
+            videoBuffer = Buffer.from(output.data, 'base64');
+            break;
+          }
+        }
+      }
+
+      if (!videoBuffer) {
+        throw new Error('No video output returned from gemini-omni-1.1-flash interaction.');
+      }
+
+      const videoBase64Out = videoBuffer.toString('base64');
+      res.json({
+        success: true,
+        videoUrl: `data:video/mp4;base64,${videoBase64Out}`,
+        mimeType: 'video/mp4',
+        model: 'gemini-omni-1.1-flash',
+      });
+    } catch (err: any) {
+      console.error('[Omni 1.1 Flash Video Error]', err);
+      res.status(500).json({ error: err.message || 'Video generation failed.' });
+    }
+  });
+
+  // Legacy /api/generate-video endpoint upgraded to use gemini-omni-1.1-flash Interactions API
+  app.post('/api/generate-video', verifyJoeyClientSession, async (req, res) => {
+    const { prompt, imageBase64, imageMimeType, aspectRatio } = req.body;
+    const activeAi = getGenAI();
+    if (!activeAi) {
+      return res.status(500).json({ error: 'Gemini AI client is not initialized.' });
+    }
+    try {
+      const targetAspect = aspectRatio === '9:16' ? '9:16' : '16:9';
+      let inputPayload: any = prompt || 'Animate this scene with smooth cinematic motion';
+      if (imageBase64) {
+        const cleanBase64 = imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64;
+        inputPayload = [
+          {
+            type: 'image',
+            mime_type: imageMimeType || 'image/png',
+            data: cleanBase64,
+          },
+          {
+            type: 'text',
+            text: prompt || 'Animate this image',
+          },
+        ];
+      }
+
+      const interaction: any = await activeAi.interactions.create({
+        model: 'gemini-omni-1.1-flash',
+        input: inputPayload,
+        response_format: {
+          type: 'video',
+          aspect_ratio: targetAspect,
+          duration: '5s',
+          resolution: '720p',
+        },
+      } as any);
+
+      let videoBuffer: Buffer | null = null;
+      if (interaction.output_video) {
+        videoBuffer = Buffer.isBuffer(interaction.output_video)
+          ? interaction.output_video
+          : typeof interaction.output_video === 'string'
+          ? Buffer.from(interaction.output_video, 'base64')
+          : Buffer.from(interaction.output_video);
+      } else if (Array.isArray(interaction.outputs)) {
+        for (const output of interaction.outputs) {
+          if (output.type === 'video' && output.data) {
+            videoBuffer = Buffer.from(output.data, 'base64');
+            break;
+          }
+        }
+      }
+
+      if (!videoBuffer) {
+        throw new Error('Video generation returned empty buffer.');
+      }
+
+      const opId = `omni_video_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      omniVideoCache.set(opId, videoBuffer);
+      res.json({
+        operationName: opId,
+        done: true,
+        videoUrl: `data:video/mp4;base64,${videoBuffer.toString('base64')}`,
+      });
+    } catch (err: any) {
+      console.error('Video generation failed:', err);
       res.status(500).json({ error: err.message });
     }
   });
@@ -1621,16 +1824,20 @@ ${joeyEpisodicMemory.length > 0
     if (!operationName) {
       return res.status(400).json({ error: 'operationName parameter is required.' });
     }
-    if (!ai) {
+    if (omniVideoCache.has(operationName)) {
+      return res.json({ done: true, response: { ready: true } });
+    }
+    const activeAi = getGenAI();
+    if (!activeAi) {
       return res.status(500).json({ error: 'Gemini AI client is not initialized.' });
     }
     try {
       const op = new GenerateVideosOperation();
       op.name = operationName;
-      const updated = await ai.operations.getVideosOperation({ operation: op });
+      const updated = await activeAi.operations.getVideosOperation({ operation: op });
       res.json({ done: updated.done, response: updated.response });
     } catch (err: any) {
-      console.error("Video polling failed:", err);
+      console.error('Video polling failed:', err);
       res.status(500).json({ error: err.message });
     }
   });
@@ -1640,55 +1847,149 @@ ${joeyEpisodicMemory.length > 0
     if (!operationName) {
       return res.status(400).json({ error: 'operationName parameter is required.' });
     }
-    if (!ai) {
+    if (omniVideoCache.has(operationName)) {
+      const buf = omniVideoCache.get(operationName)!;
+      res.setHeader('Content-Type', 'video/mp4');
+      return res.send(buf);
+    }
+    const activeAi = getGenAI();
+    if (!activeAi) {
       return res.status(500).json({ error: 'Gemini AI client is not initialized.' });
     }
     try {
       const op = new GenerateVideosOperation();
       op.name = operationName;
-      const updated = await ai.operations.getVideosOperation({ operation: op });
+      const updated = await activeAi.operations.getVideosOperation({ operation: op });
       const uri = updated.response?.generatedVideos?.[0]?.video?.uri;
       if (!uri) {
         return res.status(404).json({ error: 'Video URI not found or video not ready yet.' });
       }
-      
       const videoRes = await fetch(uri, {
-        headers: { 'x-goog-api-key': apiKey || '' },
+        headers: { 'x-goog-api-key': process.env.GEMINI_API_KEY || '' },
       });
-      
       res.setHeader('Content-Type', 'video/mp4');
-      
-      const responseStream = videoRes.body;
-      if (responseStream) {
-        // @ts-ignore
-        if (typeof responseStream.pipe === 'function') {
-          // @ts-ignore
-          responseStream.pipe(res);
-        } else {
-          // @ts-ignore
-          const reader = responseStream.getReader();
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            res.write(value);
-          }
-          res.end();
-        }
-      } else {
-        res.status(500).json({ error: 'Failed to retrieve video stream.' });
-      }
+      const arrayBuf = await videoRes.arrayBuffer();
+      res.send(Buffer.from(arrayBuf));
     } catch (err: any) {
-      console.error("Video download failed:", err);
+      console.error('Video download failed:', err);
       res.status(500).json({ error: err.message });
     }
   });
 
-  // API: Visual Brain Render
-  
-app.post('/api/vision/render', async (req, res) => {
-    const { prompt, isVideo, width, height, seed } = req.body;
+  // API: Generate Music with Lyria 3 (lyria-3-clip-preview & lyria-3-pro-preview)
+  app.post('/api/gemini/music', verifyJoeyClientSession, async (req, res) => {
+    const { prompt, model, imageBase64, imageMimeType } = req.body;
+    if (!prompt) {
+      return res.status(400).json({ error: 'Prompt is required for music generation.' });
+    }
+    const activeAi = getGenAI();
+    if (!activeAi) {
+      return res.status(500).json({ error: 'Gemini AI client is not initialized.' });
+    }
+    try {
+      const selectedMusicModel =
+        model === 'lyria-3-pro-preview' ? 'lyria-3-pro-preview' : 'lyria-3-clip-preview';
+
+      let contentsPayload: any = prompt;
+      if (imageBase64) {
+        const cleanBase64 = imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64;
+        contentsPayload = [
+          prompt,
+          {
+            inlineData: {
+              data: cleanBase64,
+              mimeType: imageMimeType || 'image/jpeg',
+            },
+          },
+        ];
+      }
+
+      const responseStream = await activeAi.models.generateContentStream({
+        model: selectedMusicModel,
+        contents: contentsPayload,
+        config: {
+          responseModalities: [Modality.AUDIO],
+        },
+      });
+
+      const audioBuffers: Buffer[] = [];
+      let lyricsText = '';
+      let mimeType = 'audio/wav';
+
+      for await (const chunk of responseStream) {
+        const parts = chunk.candidates?.[0]?.content?.parts || [];
+        for (const part of parts) {
+          if (part.inlineData?.data) {
+            if (part.inlineData.mimeType) {
+              mimeType = part.inlineData.mimeType;
+            }
+            audioBuffers.push(Buffer.from(part.inlineData.data, 'base64'));
+          }
+          if (part.text) {
+            lyricsText += part.text;
+          }
+        }
+      }
+
+      if (audioBuffers.length === 0) {
+        throw new Error('No audio stream returned from Lyria model.');
+      }
+
+      const fullAudioBuffer = Buffer.concat(audioBuffers);
+      const audioBase64 = fullAudioBuffer.toString('base64');
+
+      res.json({
+        success: true,
+        audioUrl: `data:${mimeType};base64,${audioBase64}`,
+        mimeType,
+        lyrics: lyricsText.trim(),
+        model: selectedMusicModel,
+      });
+    } catch (err: any) {
+      console.error('[Lyria Music Error]', err);
+      res.status(500).json({ error: err.message || 'Music synthesis failed.' });
+    }
+  });
+
+  // API: Visual Brain Render (upgraded with gemini-nano-banana-2.1 primary + UnifiedRenderer fallback)
+  app.post('/api/vision/render', async (req, res) => {
+    const { prompt, isVideo, width, height, seed, aspectRatio, imageSize } = req.body;
     if (!prompt) return res.status(400).json({ error: 'Prompt missing' });
-    
+
+    const activeAi = getGenAI();
+    if (activeAi && !isVideo) {
+      try {
+        const processed = JoeyUnifiedRenderer.processArtisticPrompt(prompt);
+        const nanoRes = await activeAi.models.generateContent({
+          model: 'gemini-nano-banana-2.1',
+          contents: { parts: [{ text: processed.enhancedPrompt }] },
+          config: {
+            imageConfig: {
+              aspectRatio: aspectRatio || '1:1',
+              imageSize: imageSize || '1K',
+            },
+          },
+        });
+        const parts = nanoRes.candidates?.[0]?.content?.parts || [];
+        for (const part of parts) {
+          if (part.inlineData?.data) {
+            const mime = part.inlineData.mimeType || 'image/png';
+            return res.json({
+              success: true,
+              log: `${processed.label} generated via gemini-nano-banana-2.1 under AAA Directive - Artistic Freedom Predominance.`,
+              imageUrl: `data:${mime};base64,${part.inlineData.data}`,
+              enhancedPrompt: processed.enhancedPrompt,
+              category: processed.category,
+              artisticFreedomActive: true,
+              constitutionRule: 'AAA Directive - Artistic Freedom Predominance',
+            });
+          }
+        }
+      } catch (nanoErr) {
+        console.warn('[Vision API] gemini-nano-banana-2.1 fallback to UnifiedRenderer:', nanoErr);
+      }
+    }
+
     try {
       const renderResult = await JoeyUnifiedRenderer.renderMedia({
         prompt,
@@ -1722,7 +2023,8 @@ app.post('/api/vision/render', async (req, res) => {
         return res.status(400).json({ error: 'Language and prompt parameters are required.' });
       }
 
-      if (!ai) {
+      const activeAi = getGenAI();
+      if (!activeAi) {
         return res.json({
           success: false,
           error: 'No active Gemini API key found in the cloud workspace secrets panel.'
@@ -1742,8 +2044,8 @@ app.post('/api/vision/render', async (req, res) => {
       Make sure to implement robust error handling, security hardening, and beautiful styling if HTML/CSS.
       Output ONLY valid JSON matching the schema.`;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.5-flash',
+      const response = await activeAi.models.generateContent({
+        model: 'gemini-3.8-flash',
         contents: fullPrompt,
         config: {
           systemInstruction,
@@ -1785,7 +2087,7 @@ app.post('/api/vision/render', async (req, res) => {
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Joey AI Fortified Applet</title>
+    <title>Joey AI Chatbot</title>
   </head>
   <body class="bg-[#0b0c10] text-[#c5c6c7]">
     <div id="root"></div>
@@ -1815,9 +2117,138 @@ app.post('/api/vision/render', async (req, res) => {
   });
 
   const PORT = 3000;
+  const httpServer = http.createServer(app);
+
+  // WebSocket Server for Real-Time Voice Conversations via gemini-3.8-live
+  const wss = new WebSocketServer({ noServer: true });
+
+  httpServer.on('upgrade', (request, socket, head) => {
+    const pathname = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`).pathname;
+    if (pathname === '/api/live' || pathname === '/live') {
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        wss.emit('connection', ws, request);
+      });
+    }
+  });
+
+  wss.on('connection', async (ws: WebSocket) => {
+    const activeAi = getGenAI();
+    if (!activeAi) {
+      ws.send(JSON.stringify({ type: 'error', message: 'GEMINI_API_KEY is not configured on the server.' }));
+      ws.close();
+      return;
+    }
+
+    let liveSession: any = null;
+    try {
+      liveSession = await activeAi.live.connect({
+        model: 'gemini-3.8-live',
+        config: {
+          responseModalities: [Modality.AUDIO],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: 'Puck' },
+            },
+          },
+          systemInstruction: {
+            parts: [
+              {
+                text: "You are Joey, a highly intelligent, chill 1980s retro-cyber themed security AI co-pilot. You call the user 'Boss'. Keep your spoken answers natural, articulate, upbeat, and concise.",
+              },
+            ],
+          },
+          inputAudioTranscription: {},
+          outputAudioTranscription: {},
+        },
+        callbacks: {
+          onopen: () => {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: 'connected', model: 'gemini-3.8-live' }));
+            }
+          },
+          onmessage: (message: any) => {
+            if (ws.readyState !== WebSocket.OPEN) return;
+            const sc = message.serverContent;
+            if (sc) {
+              if (sc.interrupted) {
+                ws.send(JSON.stringify({ type: 'interrupted' }));
+              }
+              if (sc.inputTranscription?.text) {
+                ws.send(JSON.stringify({ type: 'input_transcript', text: sc.inputTranscription.text }));
+              }
+              if (sc.outputTranscription?.text) {
+                ws.send(JSON.stringify({ type: 'output_transcript', text: sc.outputTranscription.text }));
+              }
+              const parts = sc.modelTurn?.parts || [];
+              for (const part of parts) {
+                if (part.inlineData?.data) {
+                  ws.send(
+                    JSON.stringify({
+                      type: 'audio',
+                      data: part.inlineData.data,
+                      mimeType: part.inlineData.mimeType || 'audio/pcm;rate=24000',
+                    })
+                  );
+                }
+                if (part.text) {
+                  ws.send(JSON.stringify({ type: 'text', text: part.text }));
+                }
+              }
+            }
+          },
+          onerror: (err: any) => {
+            console.error('[Gemini Live API Error]:', err);
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: 'error', message: err?.message || 'Live API error' }));
+            }
+          },
+          onclose: () => {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.close();
+            }
+          },
+        },
+      });
+
+      ws.on('message', (raw) => {
+        if (!liveSession) return;
+        try {
+          const msg = JSON.parse(raw.toString());
+          if (msg.type === 'audio' && msg.data) {
+            liveSession.sendRealtimeInput({
+              audio: {
+                data: msg.data,
+                mimeType: 'audio/pcm;rate=16000',
+              },
+            });
+          } else if (msg.type === 'text' && msg.text) {
+            liveSession.sendClientContent({
+              turns: msg.text,
+              turnComplete: true,
+            });
+          }
+        } catch (parseErr) {
+          console.error('[Live WS Parse Error]:', parseErr);
+        }
+      });
+
+      ws.on('close', () => {
+        try {
+          liveSession?.close();
+        } catch (e) {}
+      });
+    } catch (connErr: any) {
+      console.error('[Failed to connect to Gemini 3.8 Live]:', connErr);
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'error', message: connErr?.message || 'Failed to establish Live session' }));
+        ws.close();
+      }
+    }
+  });
+
   // Node proxy binds to 0.0.0.0 for container networking, but application-level filtering locks access to the Kyber device key
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[BOOT] Secured Node proxy active on port ${PORT}.`);
+  httpServer.listen(PORT, '0.0.0.0', () => {
+    console.log(`[BOOT] Secured Node proxy + Gemini Live WebSocket bridge active on port ${PORT}.`);
     console.log(`[SECURITY] External manipulation blocked. Kyber-encrypted hardware lock active. Strict HTTPS/TLS 1.3 enforced. Secure tunnel bypass is CLOSED.`);
   });
 }

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Upload, Shield, Menu, Lock, Zap, Cpu, ShieldAlert, CheckCircle, BrainCircuit, Settings, Volume2, VolumeX, Camera, CameraOff, Sparkles, Terminal, Search, History, Activity } from 'lucide-react';
+import { Send, Upload, Shield, Menu, Lock, Zap, Cpu, ShieldAlert, CheckCircle, BrainCircuit, Settings, Volume2, VolumeX, Camera, CameraOff, Sparkles, Terminal, Search, History, Activity, Mic, Globe, Gamepad2, ExternalLink } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
 import QuantumDecapsulator from './components/QuantumDecapsulator';
@@ -16,6 +16,8 @@ import CameraScanner from './components/CameraScanner';
 import QuantumSynthesisLab from './components/QuantumSynthesisLab';
 import CodeCanvas from './components/CodeCanvas';
 import LandingPage from './components/LandingPage';
+import LiveVoiceModal from './components/LiveVoiceModal';
+import CyberArenaGame3D from './components/CyberArenaGame3D';
 import { auth, db, handleFirestoreError, OperationType, doc, getDoc, setDoc, updateDoc, onSnapshot } from "./firebase";
 import CryptoJS from 'crypto-js';
 import { Kyber768 } from './lib/kyber';
@@ -409,6 +411,8 @@ export default function App() {
     role: string;
     content: string;
     imageUrl?: string;
+    videoUrl?: string;
+    groundingChunks?: any[];
     superposition?: SuperpositionData;
     timestamp?: string;
     textColor?: string;
@@ -432,7 +436,9 @@ export default function App() {
   const [fileType, setFileType] = useState<'image' | 'video' | null>(null);
   const [fileMimeType, setFileMimeType] = useState<string | null>(null);
   const [thinkingMode, setThinkingMode] = useState<boolean>(false);
-  const [selectedModel, setSelectedModel] = useState<string>('auto');
+  const [useSearchGrounding, setUseSearchGrounding] = useState<boolean>(true);
+  const [isLiveVoiceOpen, setIsLiveVoiceOpen] = useState<boolean>(false);
+  const [selectedModel, setSelectedModel] = useState<string>('gemini-3.8-flash');
   
   // Shared canvas states
   const [canvasCode, setCanvasCode] = useState<string>('');
@@ -632,6 +638,7 @@ export default function App() {
           videoBase64: videoBase64 || undefined,
           videoMimeType: videoMimeType || undefined,
           thinkingMode,
+          useSearchGrounding,
           selectedModel,
           messages: messages.map(m => ({ role: m.role, content: m.content })),
           userProfile: profile,
@@ -703,6 +710,7 @@ export default function App() {
           role: 'assistant', 
           content: finalReply, 
           imageUrl: data.imageUrl, 
+          groundingChunks: data.groundingChunks,
           superposition: collapsedAssistantSuper,
           timestamp: replyTimestamp,
           textColor: sentiment.textColor
@@ -830,6 +838,28 @@ export default function App() {
           onClose={() => setIsCameraScannerOpen(false)}
         />
       )}
+      <LiveVoiceModal
+        isOpen={isLiveVoiceOpen}
+        onClose={() => setIsLiveVoiceOpen(false)}
+        onAddTranscriptToChat={(_title, transcriptText) => {
+          const sentiment = analyzeSentiment(transcriptText);
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: 'assistant',
+              content: transcriptText,
+              textColor: sentiment.textColor,
+              timestamp: new Date().toLocaleTimeString('en-US', {
+                hour12: false,
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+              }),
+            },
+          ]);
+          setActiveTab('chat');
+        }}
+      />
 
       {/* Dynamic Theme Background Layer */}
       <div 
@@ -1209,7 +1239,45 @@ export default function App() {
               );
             })()}
           </div>
-          <div className="flex items-center gap-4 text-[10px] font-mono">
+          <div className="flex items-center gap-2 sm:gap-3 text-[10px] font-mono">
+            <div className="hidden lg:flex items-center gap-1.5 mr-2">
+              <button
+                onClick={() => setActiveTab('chat')}
+                className={`px-2.5 py-1 rounded-lg border transition cursor-pointer ${
+                  activeTab === 'chat'
+                    ? 'bg-cyan-950/80 border-[#00ffff] text-[#00ffff] font-bold'
+                    : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:text-white'
+                }`}
+              >
+                Chatbot
+              </button>
+              <button
+                onClick={() => setActiveTab('synthesis')}
+                className={`px-2.5 py-1 rounded-lg border transition cursor-pointer ${
+                  activeTab === 'synthesis'
+                    ? 'bg-fuchsia-950/80 border-fuchsia-400 text-fuchsia-300 font-bold'
+                    : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:text-white'
+                }`}
+              >
+                Images / Video / Music
+              </button>
+              <button
+                onClick={() => setActiveTab('arena')}
+                className={`px-2.5 py-1 rounded-lg border transition flex items-center gap-1 cursor-pointer ${
+                  activeTab === 'arena'
+                    ? 'bg-emerald-950/80 border-emerald-400 text-emerald-300 font-bold'
+                    : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:text-white'
+                }`}
+              >
+                <Gamepad2 className="w-3.5 h-3.5" /> 3D Game
+              </button>
+              <button
+                onClick={() => setIsLiveVoiceOpen(true)}
+                className="px-2.5 py-1 rounded-lg bg-rose-950/70 border border-rose-500/60 text-rose-300 hover:border-rose-400 font-bold flex items-center gap-1 transition cursor-pointer"
+              >
+                <Mic className="w-3.5 h-3.5" /> Live Voice
+              </button>
+            </div>
             <span className="text-slate-400">LVL: <span className="text-white font-bold">{profile.level}</span></span>
             <span className="text-slate-400">XP: <span className="text-emerald-400">{profile.xp}</span></span>
             <button
@@ -1350,6 +1418,34 @@ export default function App() {
                           </div>
                         )}
 
+                        {/* Google Search Grounding Sources */}
+                        {msg.groundingChunks && msg.groundingChunks.length > 0 && (
+                          <div className="mt-2 pt-2 border-t border-slate-800/80 space-y-1.5">
+                            <div className="text-[9px] font-mono text-[#00ffff] uppercase tracking-wider flex items-center gap-1">
+                              <Globe className="w-3 h-3" /> Google Search Grounded Sources:
+                            </div>
+                            <div className="flex flex-wrap gap-1.5">
+                              {msg.groundingChunks.map((chunk: any, cIdx: number) => {
+                                const uri = chunk?.web?.uri;
+                                const title = chunk?.web?.title || uri;
+                                if (!uri) return null;
+                                return (
+                                  <a
+                                    key={cIdx}
+                                    href={uri}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="px-2 py-1 rounded bg-slate-900/90 border border-cyan-500/30 hover:border-[#00ffff] text-[9px] font-mono text-cyan-300 flex items-center gap-1 transition max-w-[240px] truncate"
+                                  >
+                                    <ExternalLink className="w-2.5 h-2.5 shrink-0" />
+                                    <span className="truncate">{title}</span>
+                                  </a>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
                         {/* Cryptographic Attestation Superposition Indicator */}
                         <QuantumSuperpositionIndicator superposition={msg.superposition} role={msg.role} />
                       </div>
@@ -1416,7 +1512,7 @@ export default function App() {
                     type="button" 
                     onClick={() => setThinkingMode(!thinkingMode)}
                     title={thinkingMode ? "Disable Quantum High Thinking Mode" : "Enable Quantum High Thinking Mode"}
-                    className={`p-3 rounded-xl border transition shrink-0 flex items-center gap-1.5 ${
+                    className={`p-3 rounded-xl border transition shrink-0 flex items-center gap-1.5 cursor-pointer ${
                       thinkingMode 
                         ? 'bg-fuchsia-950/40 border-fuchsia-500 text-fuchsia-400 shadow-[0_0_12px_rgba(217,70,239,0.4)]' 
                         : 'bg-[#101726] border-[#1e293b] text-slate-400 hover:text-fuchsia-400 hover:border-fuchsia-500/30'
@@ -1427,20 +1523,46 @@ export default function App() {
                       {thinkingMode ? "COGNITIVE_ON" : "COGNITIVE_OFF"}
                     </span>
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => setUseSearchGrounding(!useSearchGrounding)}
+                    title={useSearchGrounding ? "Google Search Grounding Enabled" : "Enable Google Search Grounding"}
+                    className={`p-3 rounded-xl border transition shrink-0 flex items-center gap-1.5 cursor-pointer ${
+                      useSearchGrounding
+                        ? 'bg-cyan-950/50 border-[#00ffff] text-[#00ffff] shadow-[0_0_12px_rgba(0,255,255,0.3)]'
+                        : 'bg-[#101726] border-[#1e293b] text-slate-400 hover:text-[#00ffff] hover:border-[#00ffff]/30'
+                    }`}
+                  >
+                    <Globe className="w-5 h-5" />
+                    <span className="text-[9px] font-mono font-bold uppercase hidden lg:inline">
+                      {useSearchGrounding ? "SEARCH_ON" : "SEARCH_OFF"}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsLiveVoiceOpen(true)}
+                    title="Open Gemini 3.8 Live Voice Conversation"
+                    className="p-3 rounded-xl bg-rose-950/40 border border-rose-500/50 text-rose-300 hover:border-rose-400 transition shrink-0 flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Mic className="w-5 h-5" />
+                    <span className="text-[9px] font-mono font-bold uppercase hidden lg:inline">
+                      LIVE_VOICE
+                    </span>
+                  </button>
                   <input type="file" ref={fileInputRef} className="hidden" accept="image/*,video/*" onChange={handleFileUpload} />
                   
                   <div className="flex flex-col gap-2 flex-1">
                     <select
                       value={selectedModel}
                       onChange={(e) => setSelectedModel(e.target.value)}
-                      className="bg-[#101726] border border-[#1e293b] text-xs font-mono text-slate-400 rounded-lg p-1 outline-none self-end max-w-fit"
+                      className="bg-[#101726] border border-[#1e293b] text-xs font-mono text-slate-300 rounded-lg p-1 outline-none self-end max-w-fit"
                     >
-                      <option value="auto">Joey's Sophisticated Output Generator (Auto)</option>
-                      <option value="gemini">Gemini</option>
+                      <option value="gemini-3.8-flash">Gemini 3.8 Flash (General &amp; Search Grounding)</option>
+                      <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash-Lite (Fast Low-Latency)</option>
+                      <option value="auto">Joey&apos;s Sophisticated Output Generator (Auto)</option>
                       <option value="openai">OpenAI (GPT-4o)</option>
                       <option value="llama">Llama 3.3</option>
                       <option value="mistral">Mistral (Mixtral 8x7B)</option>
-                      <option value="maverick">Maverick Quantum Protocol</option>
                     </select>
                     <div className="relative">
                       <input
@@ -1506,26 +1628,24 @@ export default function App() {
                   onAddMessageToChat={(imageUrl, text) => {
                     const sentiment = analyzeSentiment(text);
                     setProfile(prev => ({ ...prev, mood: sentiment.mood }));
-                    setMessages(prev => [...prev, { role: 'assistant', content: text, imageUrl, textColor: sentiment.textColor }]);
+                    setMessages(prev => [...prev, { role: 'assistant', content: text, imageUrl: imageUrl || undefined, textColor: sentiment.textColor }]);
                     setActiveTab('chat');
                   }}
-                  onSaveToVault={(title, imageUrl) => {
-                    // Try to push to secure vault store
-                    try {
-                      const stored = localStorage.getItem('joey_vault_files') || '[]';
-                      const parsed = JSON.parse(stored);
-                      parsed.push({
-                        id: `f_${Date.now()}`,
-                        name: `${title.replace(/\s+/g, '_')}.jpg`,
-                        size: 'Comp image',
-                        date: new Date().toLocaleDateString(),
-                        decryptedContent: imageUrl,
-                        encrypted: false
-                      });
-                      localStorage.setItem('joey_vault_files', JSON.stringify(parsed));
-                    } catch (e) {
-                      console.error("Failed to save to vault local storage:", e);
-                    }
+                  onSaveToVault={(_title, _imageUrl) => {
+                    // Ephemeral RAM-only vault compliance per Joey AI Constitution (no localStorage)
+                  }}
+                />
+             </div>
+          )}
+
+          {activeTab === 'arena' && (
+             <div className="flex-1 overflow-hidden bg-[#070913] relative">
+                <CyberArenaGame3D
+                  onSendScoreToChat={(score, waveCleared) => {
+                    const msgText = `**[NEON SENTINEL 1985 // 3D ARENA REPORT]**\n\nBoss just piloted the Cyber-Interceptor through **Wave ${waveCleared}** with a total score of **${score.toLocaleString()} PTS**!`;
+                    const sentiment = analyzeSentiment(msgText);
+                    setMessages(prev => [...prev, { role: 'assistant', content: msgText, textColor: sentiment.textColor }]);
+                    setActiveTab('chat');
                   }}
                 />
              </div>

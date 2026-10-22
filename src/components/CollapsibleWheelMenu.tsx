@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Shield, Lock, Terminal, Activity, Settings, MessageSquare, Sparkles } from 'lucide-react';
+import { Shield, Lock, Terminal, Activity, Settings, MessageSquare, Sparkles, Gamepad2 } from 'lucide-react';
 
 interface CollapsibleWheelMenuProps {
   activeTab: string;
@@ -17,12 +17,13 @@ export default function CollapsibleWheelMenu({ activeTab, setActiveTab }: Collap
 
   const tabs = [
     { id: 'chat', label: 'Chat', icon: MessageSquare, angle: -90 },
-    { id: 'code', label: 'Canvas', icon: Terminal, angle: -38 },
-    { id: 'vault', label: 'Vault', icon: Lock, angle: 13 },
-    { id: 'sentinel', label: 'Sentinel', icon: Shield, angle: 64 },
-    { id: 'synthesis', label: 'Synthesis', icon: Sparkles, angle: 115 },
-    { id: 'growth', label: 'Growth', icon: Activity, angle: 166 },
-    { id: 'settings', label: 'Settings', icon: Settings, angle: 217 },
+    { id: 'synthesis', label: 'Synthesis', icon: Sparkles, angle: -45 },
+    { id: 'arena', label: '3D Game', icon: Gamepad2, angle: 0 },
+    { id: 'code', label: 'Canvas', icon: Terminal, angle: 45 },
+    { id: 'vault', label: 'Vault', icon: Lock, angle: 90 },
+    { id: 'sentinel', label: 'Sentinel', icon: Shield, angle: 135 },
+    { id: 'growth', label: 'Growth', icon: Activity, angle: 180 },
+    { id: 'settings', label: 'Settings', icon: Settings, angle: 225 },
   ];
 
   return (
